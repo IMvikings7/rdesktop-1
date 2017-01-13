@@ -111,6 +111,11 @@ char g_seamless_shell[512];
 char g_seamless_spawn_cmd[512];
 RD_BOOL g_seamless_persistent_mode = True;
 RD_BOOL g_user_quit = False;
+
+RD_BOOL g_gamma_correction = False; // itbeckham
+uint32 g_gamma_limit = 150; // itbeckham
+double g_gamma_value = 1.0; // itbeckham
+
 uint32 g_embed_wnd;
 uint32 g_rdp5_performanceflags =
 	PERF_DISABLE_WALLPAPER | PERF_DISABLE_FULLWINDOWDRAG | PERF_DISABLE_MENUANIMATIONS |
@@ -720,7 +725,11 @@ main(int argc, char *argv[])
 				break;
 
 			case 'B':
-				g_ownbackstore = False;
+				if(!g_gamma_correction)
+					g_ownbackstore = False;
+				else
+					warning("-B was ignored by surge option\n"); // itbeckham
+
 				break;
 
 			case 'e':
@@ -931,17 +940,28 @@ main(int argc, char *argv[])
 			case '5':
 				g_rdp_version = RDP_V5;
 				break;
-#if WITH_SCARD
+
 			case 'o':
 				{
-					char *p = strchr(optarg, '=');
+					char *p = strchr(optarg, '=');	
 					if (p == NULL)
 					{
 						warning("Skipping option '%s' specified, lacks name=value format.\n", optarg);
 						continue;
+					}				
+					if (strncmp(optarg, "surge", strlen("surge")) == 0)
+					{
+						
+						g_ownbackstore = True; // itbeckham
+						g_gamma_correction = True;
+
+						char* tmp = strdup(p + 1);
+						g_gamma_limit = atoi(tmp);
 					}
 
-					if (strncmp(optarg, "sc-csp-name", strlen("sc-scp-name")) ==
+#if WITH_SCARD
+
+					else if (strncmp(optarg, "sc-csp-name", strlen("sc-scp-name")) ==
 					    0)
 						g_sc_csp_name = strdup(p + 1);
 					else if (strncmp
@@ -956,10 +976,11 @@ main(int argc, char *argv[])
 						 (optarg, "sc-container-name",
 						  strlen("sc-container-name")) == 0)
 						g_sc_container_name = strdup(p + 1);
+#endif
 
 				}
 				break;
-#endif
+
 			case 'h':
 			case '?':
 			default:
@@ -977,6 +998,7 @@ main(int argc, char *argv[])
 	STRNCPY(server, argv[optind], sizeof(server));
 	parse_server_and_port(server);
 
+	
 	if (g_seamless_rdp)
 	{
 		if (shell[0])
@@ -1125,9 +1147,11 @@ main(int argc, char *argv[])
 		lspci_init();
 
 	rdpdr_init();
+	
 	g_reconnect_loop = False;
 	while (1)
 	{
+		
 		rdesktop_reset_state();
 
 		if (g_redirect)

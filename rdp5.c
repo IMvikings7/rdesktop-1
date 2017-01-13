@@ -30,7 +30,6 @@ rdp5_process(STREAM s)
 	uint16 length, count, x, y;
 	uint8 type, ctype;
 	uint8 *next;
-
 	uint32 roff, rlen;
 	struct stream *ns = &(g_mppc_dict.ns);
 	struct stream *ts;
@@ -108,7 +107,7 @@ rdp5_process(STREAM s)
 				process_colour_pointer_pdu(ts);
 				break;
 			case 10:	/* cached pointer */
-				process_cached_pointer_pdu(ts);
+				process_cached_pointer_pdu(ts);       // itbeckham
 				break;
 			case 11:
 				process_new_pointer_pdu(ts);

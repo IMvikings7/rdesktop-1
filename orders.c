@@ -943,7 +943,7 @@ process_raw_bmpcache(STREAM s)
 
 	bitmap = ui_create_bitmap(width, height, inverted);
 	xfree(inverted);
-	cache_put_bitmap(cache_id, cache_idx, bitmap);
+	cache_put_bitmap(cache_id, cache_idx, bitmap);	//itbeckham
 }
 
 /* Process a bitmap cache order */
@@ -992,7 +992,7 @@ process_bmpcache(STREAM s)
 	if (bitmap_decompress(bmpdata, width, height, data, size, Bpp))
 	{
 		bitmap = ui_create_bitmap(width, height, bmpdata);
-		cache_put_bitmap(cache_id, cache_idx, bitmap);
+		cache_put_bitmap(cache_id, cache_idx, bitmap);  //itbeckham
 	}
 	else
 	{
@@ -1069,7 +1069,7 @@ process_bmpcache2(STREAM s, uint16 flags, RD_BOOL compressed)
 
 	if (bitmap)
 	{
-		cache_put_bitmap(cache_id, cache_idx, bitmap);
+		cache_put_bitmap(cache_id, cache_idx, bitmap);  //itbeckham
 		if (flags & PERSIST)
 			pstcache_save_bitmap(cache_id, cache_idx, bitmap_id, width, height,
 					     width * height * Bpp, bmpdata);

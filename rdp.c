@@ -58,6 +58,10 @@ extern RD_BOOL g_numlock_sync;
 extern RD_BOOL g_pending_resize;
 extern RD_BOOL g_network_error;
 
+extern RD_BOOL g_gamma_correction; // itbeckham
+extern uint32 g_gamma_limit; // itbeckham
+extern double g_gamma_value; // itbeckham
+
 uint8 *g_next_packet;
 uint32 g_rdp_shareid;
 
@@ -1259,6 +1263,8 @@ process_pointer_pdu(STREAM s)
 	}
 }
 
+
+
 /* Process bitmap updates */
 void
 process_bitmap_updates(STREAM s)
@@ -1290,6 +1296,7 @@ process_bitmap_updates(STREAM s)
 		DEBUG(("BITMAP_UPDATE(l=%d,t=%d,r=%d,b=%d,w=%d,h=%d,Bpp=%d,cmp=%d)\n",
 		       left, top, right, bottom, width, height, Bpp, compress));
 
+
 		if (!compress)
 		{
 			int y;
@@ -1299,6 +1306,8 @@ process_bitmap_updates(STREAM s)
 				in_uint8a(s, &bmpdata[(height - y - 1) * (width * Bpp)],
 					  width * Bpp);
 			}
+
+
 			ui_paint_bitmap(left, top, cx, cy, width, height, bmpdata);
 			xfree(bmpdata);
 			continue;
@@ -1715,6 +1724,7 @@ rdp_loop(RD_BOOL * deactivated, uint32 * ext_disc_reason)
 
 	while (cont)
 	{
+
 		s = rdp_recv(&type);
 		if (s == NULL)
 			return False;

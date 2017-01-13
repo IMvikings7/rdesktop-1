@@ -127,6 +127,14 @@ extern Atom g_net_wm_state_atom;
 extern Atom g_net_wm_desktop_atom;
 extern Atom g_net_wm_ping_atom;
 
+
+extern Pixmap* g_correctedPixmap = 0;
+RD_BOOL g_gamma_correction; // itbeckham
+
+uint32 g_gamma_limit;
+double g_gamma_value; // itbeckham
+
+
 static RD_BOOL g_focused;
 static RD_BOOL g_mouse_in_wnd;
 /* Indicates that:
@@ -225,6 +233,61 @@ seamless_XDrawLines(Drawable d, XPoint * points, int npoints, int xoffset, int y
 	points[0].y += yoffset;
 }
 
+
+
+const int energy_red = 512;     // itbeckham
+const int energy_green = 768;
+const int energy_blue = 1024;
+const int energy_scale_2n = 10;
+inline int pixel_energy(unsigned char red, unsigned char green, unsigned char blue)
+{
+	return (red * energy_red + green * energy_green + blue * energy_blue) >> energy_scale_2n;
+}
+
+
+XImage* getCorrectedImage(){    // itbeckham
+	
+	int buflen, i;
+	int avenergy, bpp;
+	unsigned long energy;
+
+	XImage* img2;
+	
+	XImage* img = XGetImage(g_display, g_backstore, 0, 0, g_width, g_height, AllPlanes, ZPixmap);
+	bpp = img->bitmap_pad / 8;
+	buflen = img->width * img->height * bpp;
+	if(bpp < 3){
+		XDestroyImage(img);
+		g_gamma_value = 1.0;
+		return 0;
+	}
+	energy = 0;
+	for(i = 0; i < buflen; i+=bpp){
+		energy += (((unsigned char)img->data[i + 2] * energy_red + (unsigned char)img->data[i + 1] * energy_green + (unsigned char)img->data[i] * energy_blue) >> energy_scale_2n);
+	}
+	avenergy = (int)(energy / (img->width * img->height));
+
+	if(avenergy < g_gamma_limit){
+		XDestroyImage(img);
+		g_gamma_value = 1.0;
+		return 0;
+	}
+
+	g_gamma_value = (double)(g_gamma_limit - 5) / avenergy;
+	img2 = XGetImage(g_display, g_correctedPixmap, 0, 0, g_width, g_height, AllPlanes, ZPixmap);    
+	for(i = 0; i < buflen; i+=bpp){
+
+		img2->data[i] = (char)((uint8)(img->data[i]) * g_gamma_value);
+		img2->data[i + 1] = (char)((uint8)(img->data[i + 1]) * g_gamma_value);
+		img2->data[i + 2] = (char)((uint8)(img->data[i + 2]) * g_gamma_value);
+		if(bpp == 4) img2->data[i + 3] = 0;
+	}
+	XDestroyImage(img);
+	return img2;
+}
+
+
+// itbeckham
 #define FILL_RECTANGLE(x,y,cx,cy)\
 { \
 	XFillRectangle(g_display, g_wnd, g_gc, x, y, cx, cy); \
@@ -1855,6 +1918,10 @@ set_wm_client_machine(Display * dpy, Window win)
 	XSetWMClientMachine(dpy, win, &tp);
 }
 
+
+
+
+
 /* Initialize the UI. This is done once per process. */
 RD_BOOL
 ui_init(void)
@@ -1867,6 +1934,7 @@ ui_init(void)
 		error("Failed to open display: %s\n", XDisplayName(NULL));
 		return False;
 	}
+
 
 	{
 		uint16 endianess_test = 1;
@@ -1928,6 +1996,7 @@ ui_init(void)
 	}
 
 	DEBUG_RDP5(("server bpp %d client bpp %d depth %d\n", g_server_depth, g_bpp, g_depth));
+
 
 	return True;
 }
@@ -2048,12 +2117,14 @@ ui_create_window(void)
 
 	get_window_attribs(&attribs);
 
-	g_wnd = XCreateWindow(g_display, RootWindowOfScreen(g_screen), g_xpos, g_ypos, wndwidth,
+	g_wnd = XCreateWindow(g_display, RootWindowOfScreen(g_screen), g_xpos, g_ypos, wndwidth,	// itbeckham
 			      wndheight, 0, g_depth, InputOutput, g_visual,
 			      CWBackPixel | CWBackingStore | CWOverrideRedirect | CWColormap |
 			      CWBorderPixel, &attribs);
 	ewmh_set_wm_pid(g_wnd, getpid());
 	set_wm_client_machine(g_display, g_wnd);
+
+	g_correctedPixmap = XCreatePixmap(g_display, g_wnd, g_width, g_height, g_depth);
 
 	if (g_gc == NULL)
 	{
@@ -2828,11 +2899,23 @@ ui_paint_bitmap(int x, int y, int cx, int cy, int width, int height, uint8 * dat
 	tdata = (g_owncolmap ? data : translate_image(width, height, data));
 	image = XCreateImage(g_display, g_visual, g_depth, ZPixmap, 0,
 			     (char *) tdata, width, height, bitmap_pad, 0);
-
 	if (g_ownbackstore)
 	{
+
 		XPutImage(g_display, g_backstore, g_gc, image, 0, 0, x, y, cx, cy);
-		XCopyArea(g_display, g_backstore, g_wnd, g_gc, x, y, cx, cy, x, y);
+		if(g_gamma_correction){
+			XImage* img = getCorrectedImage();
+
+			if(img == 0){
+				XCopyArea(g_display, g_backstore, g_wnd, g_gc, 0, 0, g_width, g_height, 0, 0);
+			}else{
+				XPutImage(g_display, g_wnd, g_gc, img, 0, 0, 0, 0, g_width, g_height);
+				XDestroyImage(img);
+			}
+		}else{
+			XCopyArea(g_display, g_backstore, g_wnd, g_gc, x, y, cx, cy, x, y);
+		}
+		
 		ON_ALL_SEAMLESS_WINDOWS(XCopyArea,
 					(g_display, g_backstore, sw->wnd, g_gc, x, y, cx, cy,
 					 x - sw->xoffset, y - sw->yoffset));
@@ -2864,6 +2947,7 @@ ui_create_glyph(int width, int height, uint8 * data)
 	int scanline;
 
 	scanline = (width + 7) / 8;
+
 
 	bitmap = XCreatePixmap(g_display, g_wnd, width, height, 1);
 	if (g_create_glyph_gc == 0)
@@ -3202,8 +3286,25 @@ void
 ui_destblt(uint8 opcode,
 	   /* dest */ int x, int y, int cx, int cy)
 {
+//	SET_FUNCTION(opcode);
+//	FILL_RECTANGLE(x, y, cx, cy);
+//	RESET_FUNCTION(opcode);
+
 	SET_FUNCTION(opcode);
-	FILL_RECTANGLE(x, y, cx, cy);
+	if(!g_gamma_correction){
+
+		FILL_RECTANGLE(x, y, cx, cy);
+	} else{
+		XFillRectangle(g_display, g_backstore, g_gc, x, y, cx, cy);
+		XImage* img = getCorrectedImage();
+
+		if(img == 0){
+			XCopyArea(g_display, g_backstore, g_wnd, g_gc, 0, 0, g_width, g_height, 0, 0);
+		}else{
+			XPutImage(g_display, g_wnd, g_gc, img, 0, 0, 0, 0, g_width, g_height);
+			XDestroyImage(img);
+		}
+	}
 	RESET_FUNCTION(opcode);
 }
 
@@ -3216,28 +3317,31 @@ static uint8 hatch_patterns[] = {
 	0x81, 0x42, 0x24, 0x18, 0x18, 0x24, 0x42, 0x81	/* 5 - bsDiagCross */
 };
 
+
 void
 ui_patblt(uint8 opcode,
 	  /* dest */ int x, int y, int cx, int cy,
-	  /* brush */ BRUSH * brush, int bgcolour, int fgcolour)
+	  /* brush */ BRUSH * brush, int bgcolor, int fgcolor)
 {
 	Pixmap fill;
 	uint8 i, ipattern[8];
+
+
 
 	SET_FUNCTION(opcode);
 
 	switch (brush->style)
 	{
 		case 0:	/* Solid */
-			SET_FOREGROUND(fgcolour);
+			SET_FOREGROUND(fgcolor);
 			FILL_RECTANGLE_BACKSTORE(x, y, cx, cy);
 			break;
 
 		case 2:	/* Hatch */
 			fill = (Pixmap) ui_create_glyph(8, 8,
 							hatch_patterns + brush->pattern[0] * 8);
-			SET_FOREGROUND(fgcolour);
-			SET_BACKGROUND(bgcolour);
+			SET_FOREGROUND(fgcolor);
+			SET_BACKGROUND(bgcolor);
 			XSetFillStyle(g_display, g_gc, FillOpaqueStippled);
 			XSetStipple(g_display, g_gc, fill);
 			XSetTSOrigin(g_display, g_gc, brush->xorigin, brush->yorigin);
@@ -3253,8 +3357,8 @@ ui_patblt(uint8 opcode,
 				for (i = 0; i != 8; i++)
 					ipattern[7 - i] = brush->pattern[i];
 				fill = (Pixmap) ui_create_glyph(8, 8, ipattern);
-				SET_FOREGROUND(bgcolour);
-				SET_BACKGROUND(fgcolour);
+				SET_FOREGROUND(bgcolor);
+				SET_BACKGROUND(fgcolor);
 				XSetFillStyle(g_display, g_gc, FillOpaqueStippled);
 				XSetStipple(g_display, g_gc, fill);
 				XSetTSOrigin(g_display, g_gc, brush->xorigin, brush->yorigin);
@@ -3277,8 +3381,8 @@ ui_patblt(uint8 opcode,
 			else
 			{
 				fill = (Pixmap) ui_create_glyph(8, 8, brush->bd->data);
-				SET_FOREGROUND(bgcolour);
-				SET_BACKGROUND(fgcolour);
+				SET_FOREGROUND(bgcolor);
+				SET_BACKGROUND(fgcolor);
 				XSetFillStyle(g_display, g_gc, FillOpaqueStippled);
 				XSetStipple(g_display, g_gc, fill);
 				XSetTSOrigin(g_display, g_gc, brush->xorigin, brush->yorigin);
@@ -3295,8 +3399,21 @@ ui_patblt(uint8 opcode,
 
 	RESET_FUNCTION(opcode);
 
-	if (g_ownbackstore)
-		XCopyArea(g_display, g_backstore, g_wnd, g_gc, x, y, cx, cy, x, y);
+	if (g_ownbackstore){ // itbeckham
+		if(g_gamma_correction){
+			XImage* img;
+			img = getCorrectedImage();
+			if(img == 0){
+				XCopyArea(g_display, g_backstore, g_wnd, g_gc, 0, 0, g_width, g_height, 0, 0);
+			}else{
+				XPutImage(g_display, g_wnd, g_gc, img, 0, 0, 0, 0, g_width, g_height);
+				XDestroyImage(img);
+			}
+			
+		}else{
+			XCopyArea(g_display, g_backstore, g_wnd, g_gc, x, y, cx, cy, x, y);
+		}
+	}
 	ON_ALL_SEAMLESS_WINDOWS(XCopyArea,
 				(g_display, g_ownbackstore ? g_backstore : g_wnd, sw->wnd, g_gc,
 				 x, y, cx, cy, x - sw->xoffset, y - sw->yoffset));
@@ -3310,9 +3427,25 @@ ui_screenblt(uint8 opcode,
 	SET_FUNCTION(opcode);
 	if (g_ownbackstore)
 	{
-		XCopyArea(g_display, g_Unobscured ? g_wnd : g_backstore,
-			  g_wnd, g_gc, srcx, srcy, cx, cy, x, y);
-		XCopyArea(g_display, g_backstore, g_backstore, g_gc, srcx, srcy, cx, cy, x, y);
+		if(g_gamma_correction){
+			XCopyArea(g_display, g_backstore, g_backstore, g_gc, srcx, srcy, cx, cy, x, y);	
+			
+			XImage* img = getCorrectedImage();
+
+			if(img == 0){
+				XCopyArea(g_display, g_backstore, g_wnd, g_gc, 0, 0, g_width, g_height, 0, 0);
+			}else{
+				XPutImage(g_display, g_wnd, g_gc, img, 0, 0, 0, 0, g_width, g_height);
+				XDestroyImage(img);
+			}
+			
+		}else{
+			XCopyArea(g_display, g_Unobscured ? g_wnd : g_backstore,
+					  g_wnd, g_gc, srcx, srcy, cx, cy, x, y);
+			XCopyArea(g_display, g_backstore, g_backstore, g_gc, srcx, srcy, cx, cy, x, y);
+
+		}
+		
 	}
 	else
 	{
@@ -3331,14 +3464,35 @@ ui_memblt(uint8 opcode,
 	  /* dest */ int x, int y, int cx, int cy,
 	  /* src */ RD_HBITMAP src, int srcx, int srcy)
 {
+
 	SET_FUNCTION(opcode);
-	XCopyArea(g_display, (Pixmap) src, g_wnd, g_gc, srcx, srcy, cx, cy, x, y);
+	
+
+	XCopyArea(g_display, (Pixmap) src, g_backstore, g_gc, srcx, srcy, cx, cy, x, y);
+	
+	if(g_gamma_correction){
+		XImage* img = getCorrectedImage();
+
+		if(img == 0){
+			XCopyArea(g_display, g_backstore, g_wnd, g_gc, 0, 0, g_width, g_height, 0, 0);
+		}else{
+			XPutImage(g_display, g_wnd, g_gc, img, 0, 0, 0, 0, g_width, g_height);
+			XDestroyImage(img);
+		}
+	}else{
+		XCopyArea(g_display, g_backstore, g_wnd, g_gc, 0, 0, g_width, g_height, 0, 0);
+	}
+	
+
+
 	ON_ALL_SEAMLESS_WINDOWS(XCopyArea,
 				(g_display, (Pixmap) src, sw->wnd, g_gc,
 				 srcx, srcy, cx, cy, x - sw->xoffset, y - sw->yoffset));
-	if (g_ownbackstore)
+	if (g_ownbackstore){
 		XCopyArea(g_display, (Pixmap) src, g_backstore, g_gc, srcx, srcy, cx, cy, x, y);
+	}
 	RESET_FUNCTION(opcode);
+
 }
 
 void
@@ -3395,8 +3549,22 @@ ui_rect(
 	       /* dest */ int x, int y, int cx, int cy,
 	       /* brush */ int colour)
 {
-	SET_FOREGROUND(colour);
-	FILL_RECTANGLE(x, y, cx, cy);
+
+	if(!g_gamma_correction){
+		SET_FOREGROUND(colour);
+		FILL_RECTANGLE(x, y, cx, cy);
+	} else{
+		XSetForeground(g_display, g_gc, TRANSLATE(colour));
+		XFillRectangle(g_display, g_backstore, g_gc, x, y, cx, cy);
+		XImage* img = getCorrectedImage();
+
+		if(img == 0){
+			XCopyArea(g_display, g_backstore, g_wnd, g_gc, 0, 0, g_width, g_height, 0, 0);
+		}else{
+			XPutImage(g_display, g_wnd, g_gc, img, 0, 0, 0, 0, g_width, g_height);
+			XDestroyImage(img);
+		}
+	}
 }
 
 void
@@ -3756,7 +3924,7 @@ ui_draw_text(uint8 font, uint8 flags, uint8 opcode, int mixmode, int x, int y,
 	}
 
 	XSetFillStyle(g_display, g_gc, FillSolid);
-
+	 //itbeckham
 	if (g_ownbackstore)
 	{
 		if (boxcx > 1)
@@ -3811,6 +3979,7 @@ ui_desktop_save(uint32 offset, int x, int y, int cx, int cy)
 void
 ui_desktop_restore(uint32 offset, int x, int y, int cx, int cy)
 {
+	printf("################# ui_desktop_restore\n"); // itbeckham
 	XImage *image;
 	uint8 *data;
 
@@ -3825,7 +3994,7 @@ ui_desktop_restore(uint32 offset, int x, int y, int cx, int cy)
 	if (g_ownbackstore)
 	{
 		XPutImage(g_display, g_backstore, g_gc, image, 0, 0, x, y, cx, cy);
-		XCopyArea(g_display, g_backstore, g_wnd, g_gc, x, y, cx, cy, x, y);
+		XCopyArea(g_display, g_backstore, g_wnd, g_gc, x, y, cx, cy, x, y); // itbeckham
 		ON_ALL_SEAMLESS_WINDOWS(XCopyArea,
 					(g_display, g_backstore, sw->wnd, g_gc,
 					 x, y, cx, cy, x - sw->xoffset, y - sw->yoffset));
